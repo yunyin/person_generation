@@ -7,6 +7,7 @@ import numpy as np
 import tensorflow as tf
 import json
 
+import copy
 import data_reader
 import model
 import optimizer
@@ -18,39 +19,63 @@ FLAGS = flags.FLAGS
 
 def HParam():
   config = dict()
-  config['batch_size'] = 1
+  config['batch_size'] = 32
   config['n_epoch'] = 5
-  config['learning_rate'] = 0.01
+  config['learning_rate'] = 0.001
   config['max_grad_norm'] = 5
   config['data_type'] = tf.float32
   config['init_scale'] = 0.1
 
-  config['vocab_size'] = 52
-  config['hidden_size'] = 100
-  config['num_layers'] = 1
-  config['seq_length'] = 10
+  config['vocab_size'] = 7000
+  config['hidden_size'] = 320
+  config['num_layers'] = 2
+  config['seq_length'] = 20
   config['metadata'] = 'metadata.tsv'
   return config
 
-def run_epoch(sess, model, data, config, is_training = False):
+def run_epoch(sess, model, data, learning_rate, is_training = False):
   data.reset()
   costs = 0
   iters = 0
+  times = 0
   while data.has_next_batch():
     x_batch, y_batch, mask = data.next_batch()
     feed_dict = {model.input_data: x_batch,
                  model.target_data: y_batch,
-                 model.lr: config['learning_rate']}
+                 model.lr: learning_rate}
     fetches = {"cost": model._cost,
                "final_state": model._final_state}
     if is_training: fetches["train_op"] = model.train_op
     vals = sess.run(fetches, feed_dict)
     costs += vals["cost"]
     iters += data.batch_size
+    times += 1
+    if times % 2000 == 100:
+      print 'step {}: training_loss:{:4f}'.format(times, np.exp(costs / iters))
+      sys.stdout.flush()
   return costs, iters
 
-def run_generate(sess, model, config):
-  pass
+def run_generate(sess, model, vocab, max_gen_len = 50):
+  x_batch = np.zeros((1, 1))
+  mask = np.ones((1, 1))
+  word = "<s>"
+  state = sess.run(model.cell.zero_state(1, tf.float32))
+
+  output = []
+  while word != '</s>' and len(output) < max_gen_len:
+    x_batch[0][0] = vocab.char2id(word)
+    feed_dict = {model.input_data: x_batch, \
+                 model._initial_state: state}
+    fetches = {"probs": model.probs,
+               "state": model.final_state}
+    vals = sess.run(fetches, feed_dict)
+    p = vals['probs'][0]
+    word = vocab.id2char(np.argmax(p))
+    if word != "</s>": output.append(word)
+
+  line = " ".join(output)
+  print line.encode('utf-8')
+  sys.stdout.flush()
 
 def train(config):
   if not FLAGS.train_data_path:
@@ -74,16 +99,23 @@ def train(config):
                                 optimizer = opt)
 
   with tf.name_scope('Generate'):
+    generate_config = copy.deepcopy(config)
+    generate_config['batch_size'] = 1
+    generate_config['seq_length'] = 1
     with tf.variable_scope("Model", reuse = True, initializer = initializer):
-      generate_model = model.Model(is_training = False, config = config)
+      generate_model = model.Model(is_training = False, config = generate_config)
 
+  print 'Start Sess'
+  sys.stdout.flush()
   with tf.Session() as sess:
     sess.run(tf.global_variables_initializer())
     for i in range(config['n_epoch']):
-      costs, iters = run_epoch(sess, train_model, train_data, config, \
+      print 'Iter {} Start'.format(i)
+      costs, iters = run_epoch(sess, train_model, train_data, \
+                               config['learning_rate'], \
                                is_training = True)
       print 'Iter {}: training_loss:{:4f}'.format(i, costs / iters)
-      run_generate(sess, generate_model, config)
+      run_generate(sess, model = generate_model, vocab = vocab)
 
 def main(_):
   config = HParam()

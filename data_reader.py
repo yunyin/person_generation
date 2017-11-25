@@ -6,11 +6,15 @@ import numpy as np
 
 class Vocab():
   def __init__(self, datafiles, metadata, vocab_limits = -1):
+    print 'Start Vocab Create'
+    sys.stdout.flush()
     total_data = []
     for line in open(datafiles):
       words = list(line.strip().replace(" ", "").decode('utf-8'))
       total_data.extend(words)
 
+    print 'Data Load End For Vocab Create'
+    sys.stdout.flush()
     words = list(set(total_data))
     words.sort()
     words.insert(0, '<unk>')
@@ -22,6 +26,7 @@ class Vocab():
     words = words[:self._vocab_size]
 
     print 'Vocabulary Size: %d' % self._vocab_size
+    sys.stdout.flush()
     self.char2id_dict = {w: i for i, w in enumerate(words)}
     self.id2char_dict = {i: w for i, w in enumerate(words)}
 
@@ -52,6 +57,8 @@ class DataReader():
     self.batch_size = batch_size
     self.vocab = vocab
 
+    print 'Start Read Data'
+    sys.stdout.flush()
     self.data = []
     for line in open(datafiles):
       line = line.strip().replace(" ", "")
@@ -60,14 +67,16 @@ class DataReader():
       words.insert(0, "<s>")
       self.data.append(words)
 
-    self.words = list(set(sum(self.data, [])))
-    self.words.sort()
+    print 'Read Data End'
+    sys.stdout.flush()
 
     self.data = self.arrange_data(self.data, self.batch_size)
     # pointer position to generate current batch
     self.reset()
 
   def arrange_data(self, data, batch_size):
+    print 'Start arrange data'
+    sys.stdout.flush()
     batch_len = np.array([0] * batch_size)
 
     refine_data = []
@@ -77,6 +86,8 @@ class DataReader():
       refine_data[idx].extend(sen)
       batch_len[idx] += len(sen)
 
+    print 'arrange data End'
+    sys.stdout.flush()
     return refine_data
 
   def reset(self):

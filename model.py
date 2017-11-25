@@ -33,10 +33,10 @@ class Model():
 
     with tf.name_scope('model'):
       basic_cell = self.lstm_cell
-      cell = tf.contrib.rnn.MultiRNNCell(
+      self.cell = tf.contrib.rnn.MultiRNNCell(
           [basic_cell()] * config['num_layers'], state_is_tuple = True)
 
-      self._initial_state = cell.zero_state(batch_size, config['data_type'])
+      self._initial_state = self.cell.zero_state(batch_size, config['data_type'])
 
       with tf.device("/cpu:0"):
         embedding = tf.get_variable(
@@ -48,7 +48,7 @@ class Model():
       with tf.variable_scope("RNN"):
         for time_step in range(seq_length):
           if time_step > 0: tf.get_variable_scope().reuse_variables()
-          (cell_output, state) = cell(inputs[:, time_step, :], state)
+          (cell_output, state) = self.cell(inputs[:, time_step, :], state)
           outputs.append(cell_output)
 
     with tf.name_scope('loss'):
@@ -58,15 +58,19 @@ class Model():
       softmax_b = tf.get_variable(
           "softmax_b", [vocab_size], dtype = config['data_type'])
       logits = tf.matmul(output, softmax_w) + softmax_b
+      self.probs = tf.nn.softmax(logits)
 
       logits = tf.reshape(logits, [batch_size, seq_length, vocab_size])
 
       loss = tf.contrib.seq2seq.sequence_loss(
           logits,
           self.target_data,
-          tf.ones([batch_size, seq_length], dtype = config['data_type']))
+          tf.ones([batch_size, seq_length],
+          dtype = config['data_type']),
+          average_across_timesteps=False,
+          average_across_batch=True)
 
-      self._cost = tf.reduce_sum(loss)
+      self._cost = cost = tf.reduce_sum(loss)
       self._final_state = state
 
     if not is_training: return
@@ -75,7 +79,7 @@ class Model():
       self._lr = tf.placeholder(tf.float32, [])
 
       tvars = tf.trainable_variables()
-      grads, _ = tf.clip_by_global_norm(tf.gradients(self._cost, tvars),
+      grads, _ = tf.clip_by_global_norm(tf.gradients(cost, tvars),
                                         config['max_grad_norm'])
       self._train_op = self._optimizer.apply_gradients(zip(grads, tvars),
                  global_step = tf.contrib.framework.get_or_create_global_step())
