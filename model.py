@@ -12,18 +12,18 @@ class Model():
     if 'reuse' in inspect.getargspec(
         tf.contrib.rnn.BasicLSTMCell.__init__).args:
       return tf.contrib.rnn.BasicLSTMCell(
-          config.hidden_size, forget_bias = 0.0, state_is_tuple = True,
+          self.config['hidden_size'], forget_bias = 0.0, state_is_tuple = True,
           reuse = tf.get_variable_scope().reuse)
     else:
       return tf.contrib.rnn.BasicLSTMCell(
-          self.config.hidden_size, forget_bias = 0.0, state_is_tuple = True)
+          self.config['hidden_size'], forget_bias = 0.0, state_is_tuple = True)
 
   def __init__(self, is_training, config, optimizer = None):
     self.config = config
-    batch_size = config.batch_size
-    seq_length = config.seq_length
-    hidden_size = config.hidden_size
-    vocab_size = config.vocab_size
+    batch_size = config['batch_size']
+    seq_length = config['seq_length']
+    hidden_size = config['hidden_size']
+    vocab_size = config['vocab_size']
 
     self._optimizer = optimizer
 
@@ -34,13 +34,13 @@ class Model():
     with tf.name_scope('model'):
       basic_cell = self.lstm_cell
       cell = tf.contrib.rnn.MultiRNNCell(
-          [basic_cell()] * config.num_layers, state_is_tuple = True)
-  
-      self._initial_state = cell.zero_state(batch_size, config.data_type)
-  
+          [basic_cell()] * config['num_layers'], state_is_tuple = True)
+
+      self._initial_state = cell.zero_state(batch_size, config['data_type'])
+
       with tf.device("/cpu:0"):
         embedding = tf.get_variable(
-            "embedding", [vocab_size, hidden_size], dtype = config.data_type)
+            "embedding", [vocab_size, hidden_size], dtype = config['data_type'])
         inputs = tf.nn.embedding_lookup(embedding, self.input_data)
 
       outputs = []
@@ -54,9 +54,9 @@ class Model():
     with tf.name_scope('loss'):
       output = tf.reshape(tf.stack(axis = 1, values = outputs), [-1, hidden_size])
       softmax_w = tf.get_variable(
-          "softmax_w", [hidden_size, vocab_size], dtype = config.data_type)
+          "softmax_w", [hidden_size, vocab_size], dtype = config['data_type'])
       softmax_b = tf.get_variable(
-          "softmax_b", [vocab_size], dtype = config.data_type)
+          "softmax_b", [vocab_size], dtype = config['data_type'])
       logits = tf.matmul(output, softmax_w) + softmax_b
 
       logits = tf.reshape(logits, [batch_size, seq_length, vocab_size])
@@ -64,17 +64,19 @@ class Model():
       loss = tf.contrib.seq2seq.sequence_loss(
           logits,
           self.target_data,
-          tf.ones([batch_size, seq_length], dtype = config.data_type))
+          tf.ones([batch_size, seq_length], dtype = config['data_type']))
 
       self._cost = tf.reduce_sum(loss)
       self._final_state = state
+
+    if not is_training: return
 
     with tf.name_scope('optimize'):
       self._lr = tf.placeholder(tf.float32, [])
 
       tvars = tf.trainable_variables()
       grads, _ = tf.clip_by_global_norm(tf.gradients(self._cost, tvars),
-                                        config.max_grad_norm)
+                                        config['max_grad_norm'])
       self._train_op = self._optimizer.apply_gradients(zip(grads, tvars),
                  global_step = tf.contrib.framework.get_or_create_global_step())
 
