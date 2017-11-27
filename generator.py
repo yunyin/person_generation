@@ -6,34 +6,47 @@ import time
 import numpy as np
 import tensorflow as tf
 import json
-
 import copy
+
 import data_reader
 import model
 import optimizer
 
 flags = tf.flags
-flags.DEFINE_string("train_data_path", None,
-                    "Where the training data is stored.")
+flags.DEFINE_string("config", None,
+                    "Directory of Config File.")
 FLAGS = flags.FLAGS
 
 def HParam():
-  config = dict()
-  config['batch_size'] = 32
-  config['n_epoch'] = 5
-  config['learning_rate'] = 0.001
-  config['max_grad_norm'] = 5
-  config['data_type'] = tf.float32
-  config['init_scale'] = 0.1
+  if not FLAGS.config:
+    raise ValueError("Must set --config")
 
-  config['vocab_size'] = 7000
-  config['hidden_size'] = 320
-  config['num_layers'] = 2
-  config['seq_length'] = 20
-  config['metadata'] = 'metadata.tsv'
+  if not os.path.exists(FLAGS.config):
+    raise ValueError("Config File %s Does Not Exist" % (FLAGS.config))
+
+  config = json.load(open(FLAGS.config))
+  if config['data_type'] == 'float16':
+    config['data_type'] = tf.float16
+  else: config['data_type'] = tf.float32
+
+#  config = dict()
+#  config['batch_size'] = 32
+#  config['n_epoch'] = 10
+#  config['decay_epoch'] = 4
+#  config['learning_rate'] = 0.01
+#  config['lr_decay'] = 0.9
+#  config['max_grad_norm'] = 5
+#  config['data_type'] = tf.float32
+#  config['init_scale'] = 0.1
+#
+#  config['vocab_size'] = 16000
+#  config['hidden_size'] = 320
+#  config['num_layers'] = 2
+#  config['seq_length'] = 10
+#  config['metadata'] = 'metadata.tsv'
   return config
 
-def run_epoch(sess, model, data, learning_rate, is_training = False):
+def run_epoch(sess, model, data, is_training = False, gen_model = None, vocab = None):
   data.reset()
   costs = 0
   iters = 0
@@ -42,22 +55,28 @@ def run_epoch(sess, model, data, learning_rate, is_training = False):
     x_batch, y_batch, mask = data.next_batch()
     feed_dict = {model.input_data: x_batch,
                  model.target_data: y_batch,
-                 model.lr: learning_rate}
-    fetches = {"cost": model._cost,
-               "final_state": model._final_state}
+                 model.mask: mask}
+
+    fetches = {"costs": model._cost}
     if is_training: fetches["train_op"] = model.train_op
+
     vals = sess.run(fetches, feed_dict)
-    costs += vals["cost"]
-    iters += data.batch_size
+    costs += vals["costs"]
+    
+    iters += data.seq_length
     times += 1
     if times % 2000 == 100:
       print 'step {}: training_loss:{:4f}'.format(times, np.exp(costs / iters))
       sys.stdout.flush()
+    if times % 20000 == 0 and vocab != None:
+      sample(sess, model = model, vocab = vocab)
+
+  if gen_model != None and vocab != None:
+    sample(sess, model = gen_model, vocab = vocab)
   return costs, iters
 
-def run_generate(sess, model, vocab, max_gen_len = 50):
+def sample(sess, model, vocab, max_gen_len = 50):
   x_batch = np.zeros((1, 1))
-  mask = np.ones((1, 1))
   word = "<s>"
   state = sess.run(model.cell.zero_state(1, tf.float32))
 
@@ -69,53 +88,57 @@ def run_generate(sess, model, vocab, max_gen_len = 50):
     fetches = {"probs": model.probs,
                "state": model.final_state}
     vals = sess.run(fetches, feed_dict)
-    p = vals['probs'][0]
+    p = vals['probs'][0][0]
+    state = vals['state']
     word = vocab.id2char(np.argmax(p))
     if word != "</s>": output.append(word)
 
   line = " ".join(output)
+  print 'generate_len: {}'.format(len(output))
   print line.encode('utf-8')
   sys.stdout.flush()
 
 def train(config):
-  if not FLAGS.train_data_path:
-    raise ValueError("Must set --train_data_path for data")
+  vocab = data_reader.Vocab(vocab_limits = config['vocab_size'])
+  vocab.load_metadata(config['metadata'])
+  config['vocab_size'] = vocab.vocab_size()
+  print config
 
-  vocab = data_reader.Vocab(FLAGS.train_data_path, \
-                            config['metadata'], \
-                            vocab_limits = config['vocab_size'])
-  config['vocab'] = vocab.vocab_size()
-
-  train_data = data_reader.DataReader(FLAGS.train_data_path, \
+  train_data = data_reader.DataReader(config['train_data'], \
                                       vocab = vocab, \
                                       batch_size = config['batch_size'], \
                                       seq_length = config['seq_length'])
-  initializer = tf.random_uniform_initializer(-config['init_scale'], config['init_scale'])
+  initializer = tf.random_uniform_initializer(-config['init_scale'],
+                                              config['init_scale'])
   with tf.name_scope('Train'):
-    opt, _ = optimizer.get_optimizer("sgd", config['learning_rate'])
+    opt, lr = optimizer.get_optimizer("sgd", config['learning_rate'])
     with tf.variable_scope("Model", reuse = None, initializer = initializer):
       train_model = model.Model(is_training = True, \
                                 config = config, \
-                                optimizer = opt)
+                                optimizer = opt,
+                                lr = lr)
 
   with tf.name_scope('Generate'):
     generate_config = copy.deepcopy(config)
     generate_config['batch_size'] = 1
     generate_config['seq_length'] = 1
     with tf.variable_scope("Model", reuse = True, initializer = initializer):
-      generate_model = model.Model(is_training = False, config = generate_config)
+      gen_model = model.Model(is_training = False, config = generate_config)
 
   print 'Start Sess'
   sys.stdout.flush()
   with tf.Session() as sess:
     sess.run(tf.global_variables_initializer())
     for i in range(config['n_epoch']):
-      print 'Iter {} Start'.format(i)
+      lr_decay = config['lr_decay'] ** max(i + 1 - config['decay_epoch'], 0)
+      train_model.assign_lr(sess, config['learning_rate'] * lr_decay)
+
+      print 'Iter {} Start, Learning_rate: {:4f}'.format(i, sess.run(train_model.lr))
       costs, iters = run_epoch(sess, train_model, train_data, \
-                               config['learning_rate'], \
-                               is_training = True)
+                               is_training = True,
+                               gen_model = gen_model,
+                               vocab = vocab)
       print 'Iter {}: training_loss:{:4f}'.format(i, costs / iters)
-      run_generate(sess, model = generate_model, vocab = vocab)
 
 def main(_):
   config = HParam()

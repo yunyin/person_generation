@@ -5,7 +5,10 @@ import time
 import numpy as np
 
 class Vocab():
-  def __init__(self, datafiles, metadata, vocab_limits = -1):
+  def __init__(self, vocab_limits = -1):
+    self._vocab_size = vocab_limits
+
+  def create_vocab(self, datafiles, metadata, vocab_limits = -1):
     print 'Start Vocab Create'
     sys.stdout.flush()
     total_data = []
@@ -44,9 +47,26 @@ class Vocab():
   def id2char(self, id):
     return self.id2char_dict[id]
 
+  def load_metadata(self, file):
+    if not os.path.exists(file):
+      print 'Vocab Metadata {} does not exists'.format(file)
+      sys.exit(-1)
+    self.char2id_dict = dict()
+    self.id2char_dict = dict()
+
+    cnt = 0
+    for line in open(file):
+      idx, word = line.strip().decode('utf-8').split('\t')
+      self.char2id_dict[word] = int(idx)
+      self.id2char_dict[int(idx)] = word
+      cnt += 1
+      if cnt == self._vocab_size: break
+    self._vocab_size = len(self.id2char_dict)
+    print 'Loading Vocabulary Size:{}'.format(self._vocab_size)
+    sys.stdout.flush()
+
   def save_metadata(self, file):
     with open(file, 'w') as f:
-      f.write('id\tchar\n')
       for i in range(self._vocab_size):
         c = self.id2char(i)
         f.write('{}\t{}\n'.format(i, c.encode('utf-8')))
@@ -65,6 +85,7 @@ class DataReader():
       words = list(line.decode('utf-8'))
       words.append("</s>")
       words.insert(0, "<s>")
+      words = [self.vocab.char2id(c) for c in words]
       self.data.append(words)
 
     print 'Read Data End'
@@ -107,8 +128,8 @@ class DataReader():
       by = []
       b_mask = [1] * self.seq_length
       if self.pointers[i] >= len(self.data[i]) - 1:
-        bx.extend(["</s>"] * self.seq_length)
-        by.extend(["</s>"] * self.seq_length)
+        bx.extend([self.vocab.char2id("</s>")] * self.seq_length)
+        by.extend([self.vocab.char2id("</s>")] * self.seq_length)
         b_mask = [0] * self.seq_length
       elif self.pointers[i] + self.seq_length + 1 < len(self.data[i]):
         bx.extend(self.data[i][self.pointers[i]:
@@ -119,14 +140,12 @@ class DataReader():
         bx.extend(self.data[i][self.pointers[i]: len(self.data[i]) - 1])
         by.extend(self.data[i][self.pointers[i] + 1: len(self.data[i])])
         left = self.seq_length - (len(self.data[i]) - 1 - self.pointers[i])
-        bx.extend(["</s>"] * left)
-        by.extend(["</s>"] * left)
+        bx.extend([self.vocab.char2id("</s>")] * left)
+        by.extend([self.vocab.char2id("</s>")] * left)
         for j in range(self.seq_length - left, self.seq_length):
           b_mask[j] = 0
 
       # convert to ids
-      bx = [self.vocab.char2id(c) for c in bx]
-      by = [self.vocab.char2id(c) for c in by]
       x_batches.append(bx)
       y_batches.append(by)
       masks.append(b_mask)
@@ -136,14 +155,8 @@ class DataReader():
     return x_batches, y_batches, masks
 
 if __name__=='__main__':
-  vocab = Vocab(datafiles = sys.argv[1], metadata = sys.argv[2], vocab_limits = 50)
-  reader = DataReader(datafiles = sys.argv[1],
-                      vocab = vocab,
-                      batch_size = 2,
-                      seq_length = 5)
-  while reader.has_next_batch():
-    x, y, m = reader.next_batch()
-    print 'x', x
-    print 'y', y
-    print 'm', m
-    print '====='
+  vocab = Vocab()
+  vocab.create_vocab(datafiles = sys.argv[1], \
+                     metadata = sys.argv[2], \
+                     vocab_limits = int(sys.argv[3]))
+  vocab.load_metadata(sys.argv[2]) 

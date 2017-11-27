@@ -18,7 +18,7 @@ class Model():
       return tf.contrib.rnn.BasicLSTMCell(
           self.config['hidden_size'], forget_bias = 0.0, state_is_tuple = True)
 
-  def __init__(self, is_training, config, optimizer = None):
+  def __init__(self, is_training, config, optimizer = None, lr = None):
     self.config = config
     batch_size = config['batch_size']
     seq_length = config['seq_length']
@@ -26,10 +26,12 @@ class Model():
     vocab_size = config['vocab_size']
 
     self._optimizer = optimizer
+    self._lr = lr
 
     with tf.name_scope('inputs'):
       self.input_data = tf.placeholder(tf.int32, [batch_size, seq_length])
       self.target_data = tf.placeholder(tf.int32, [batch_size, seq_length])
+      self.mask = tf.placeholder(config['data_type'], [batch_size, seq_length])
 
     with tf.name_scope('model'):
       basic_cell = self.lstm_cell
@@ -58,15 +60,15 @@ class Model():
       softmax_b = tf.get_variable(
           "softmax_b", [vocab_size], dtype = config['data_type'])
       logits = tf.matmul(output, softmax_w) + softmax_b
-      self.probs = tf.nn.softmax(logits)
 
       logits = tf.reshape(logits, [batch_size, seq_length, vocab_size])
+      
+      self.probs = tf.nn.softmax(logits)
 
       loss = tf.contrib.seq2seq.sequence_loss(
-          logits,
-          self.target_data,
-          tf.ones([batch_size, seq_length],
-          dtype = config['data_type']),
+          logits = logits,
+          targets = self.target_data,
+          weights = self.mask,
           average_across_timesteps=False,
           average_across_batch=True)
 
@@ -76,13 +78,14 @@ class Model():
     if not is_training: return
 
     with tf.name_scope('optimize'):
-      self._lr = tf.placeholder(tf.float32, [])
-
       tvars = tf.trainable_variables()
       grads, _ = tf.clip_by_global_norm(tf.gradients(cost, tvars),
                                         config['max_grad_norm'])
       self._train_op = self._optimizer.apply_gradients(zip(grads, tvars),
                  global_step = tf.contrib.framework.get_or_create_global_step())
+
+    self._new_lr = tf.placeholder(tf.float32, shape=[])
+    self._lr_update = tf.assign(self._lr, self._new_lr)
 
   @property
   def initial_state(self):
@@ -103,3 +106,6 @@ class Model():
   @property
   def lr(self):
     return self._lr
+
+  def assign_lr(self, sess, new_lr):
+    sess.run(self._lr_update, feed_dict={self._new_lr: new_lr})
