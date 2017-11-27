@@ -16,6 +16,7 @@ flags = tf.flags
 flags.DEFINE_string("config", None,
                     "Directory of Config File.")
 FLAGS = flags.FLAGS
+tf.logging.set_verbosity(tf.logging.INFO)
 
 def HParam():
   if not FLAGS.config:
@@ -28,22 +29,6 @@ def HParam():
   if config['data_type'] == 'float16':
     config['data_type'] = tf.float16
   else: config['data_type'] = tf.float32
-
-#  config = dict()
-#  config['batch_size'] = 32
-#  config['n_epoch'] = 10
-#  config['decay_epoch'] = 4
-#  config['learning_rate'] = 0.01
-#  config['lr_decay'] = 0.9
-#  config['max_grad_norm'] = 5
-#  config['data_type'] = tf.float32
-#  config['init_scale'] = 0.1
-#
-#  config['vocab_size'] = 16000
-#  config['hidden_size'] = 320
-#  config['num_layers'] = 2
-#  config['seq_length'] = 10
-#  config['metadata'] = 'metadata.tsv'
   return config
 
 def run_epoch(sess, model, data, is_training = False, gen_model = None, vocab = None):
@@ -66,8 +51,7 @@ def run_epoch(sess, model, data, is_training = False, gen_model = None, vocab = 
     iters += data.seq_length
     times += 1
     if times % 2000 == 100:
-      print 'step {}: training_loss:{:4f}'.format(times, np.exp(costs / iters))
-      sys.stdout.flush()
+      tf.logging('step {}: training_loss:{:4f}'.format(times, np.exp(costs / iters)))
     if times % 20000 == 0 and vocab != None:
       sample(sess, model = model, vocab = vocab)
 
@@ -94,15 +78,14 @@ def sample(sess, model, vocab, max_gen_len = 50):
     if word != "</s>": output.append(word)
 
   line = " ".join(output)
-  print 'generate_len: {}'.format(len(output))
-  print line.encode('utf-8')
-  sys.stdout.flush()
+  tf.logging.info('generate_len: {}'.format(len(output)))
+  tf.logging.info(line.encode('utf-8'))
 
 def train(config):
   vocab = data_reader.Vocab(vocab_limits = config['vocab_size'])
   vocab.load_metadata(config['metadata'])
   config['vocab_size'] = vocab.vocab_size()
-  print config
+  tf.logging.info(config)
 
   train_data = data_reader.DataReader(config['train_data'], \
                                       vocab = vocab, \
@@ -125,20 +108,19 @@ def train(config):
     with tf.variable_scope("Model", reuse = True, initializer = initializer):
       gen_model = model.Model(is_training = False, config = generate_config)
 
-  print 'Start Sess'
-  sys.stdout.flush()
+  tf.logging.info('Start Sess')
   with tf.Session() as sess:
     sess.run(tf.global_variables_initializer())
     for i in range(config['n_epoch']):
       lr_decay = config['lr_decay'] ** max(i + 1 - config['decay_epoch'], 0)
       train_model.assign_lr(sess, config['learning_rate'] * lr_decay)
 
-      print 'Iter {} Start, Learning_rate: {:4f}'.format(i, sess.run(train_model.lr))
+      tf.logging.info('Iter {} Start, Learning_rate: {:4f}'.format(i, sess.run(train_model.lr)))
       costs, iters = run_epoch(sess, train_model, train_data, \
                                is_training = True,
                                gen_model = gen_model,
                                vocab = vocab)
-      print 'Iter {}: training_loss:{:4f}'.format(i, costs / iters)
+      tf.logging.info('Iter {}: training_loss:{:4f}'.format(i, costs / iters))
 
 def main(_):
   config = HParam()
