@@ -15,6 +15,8 @@ import optimizer
 flags = tf.flags
 flags.DEFINE_string("config", None,
                     "Directory of Config File.")
+flags.DEFINE_string("type", None,
+                    "Run Type: train/gen")
 FLAGS = flags.FLAGS
 tf.logging.set_verbosity(tf.logging.INFO)
 
@@ -62,7 +64,7 @@ def run_epoch(sess, model, data, is_training = False, gen_model = None, vocab = 
 def sample(sess, model, vocab, max_gen_len = 50):
   x_batch = np.zeros((1, 1))
   word = "<s>"
-  state = sess.run(model.cell.zero_state(1, tf.float32))
+  state = sess.run(model.initial_state)
 
   output = []
   while word != '</s>' and len(output) < max_gen_len:
@@ -109,8 +111,11 @@ def train(config):
       gen_model = model.Model(is_training = False, config = generate_config)
 
   tf.logging.info('Start Sess')
-  with tf.Session() as sess:
-    sess.run(tf.global_variables_initializer())
+
+  sv = tf.train.Supervisor(logdir = config['logdir'],
+                           save_model_secs = 10)
+  with sv.managed_session() as sess:
+    sample(sess, gen_model, vocab)
     for i in range(config['n_epoch']):
       lr_decay = config['lr_decay'] ** max(i + 1 - config['decay_epoch'], 0)
       train_model.assign_lr(sess, config['learning_rate'] * lr_decay)
@@ -122,9 +127,34 @@ def train(config):
                                vocab = vocab)
       tf.logging.info('Iter {}: training_loss:{:4f}'.format(i, costs / iters))
 
+def gen(config):
+  vocab = data_reader.Vocab(vocab_limits = config['vocab_size'])
+  vocab.load_metadata(config['metadata'])
+  config['vocab_size'] = vocab.vocab_size()
+  tf.logging.info(config)
+
+  with tf.name_scope('Generate'):
+    config['batch_size'] = 1
+    config['seq_length'] = 1
+    with tf.variable_scope("Model", reuse = None):
+      gen_model = model.Model(is_training = False, config = config)
+
+  with tf.Session() as sess:
+    saver = tf.train.Saver()
+    ckpt = tf.train.latest_checkpoint(config['logdir'])
+    tf.logging.info(ckpt)
+    saver.restore(sess, ckpt)
+
+    sample(sess, model = gen_model, vocab = vocab)
+  
 def main(_):
   config = HParam()
-  train(config)
+  if not FLAGS.type:
+    raise ValueError('run type is train/gen')
+  if FLAGS.type == 'train':
+    train(config)
+  else:
+    gen(config)
 
 if __name__ == '__main__':
   tf.app.run()
