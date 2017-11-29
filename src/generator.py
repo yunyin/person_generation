@@ -57,9 +57,9 @@ def run_epoch(sess, model, data, is_training = False, gen_model = None, vocab = 
     iters += data.seq_length
     times += 1
     if times % 2000 == 100:
-      tf.logging('step {}: training_loss:{:4f}'.format(times, np.exp(costs / iters)))
-    if times % 20000 == 0 and vocab != None:
-      sample(sess, model = model, vocab = vocab)
+      tf.logging.info('step {}: training_loss:{:4f}'.format(times, np.exp(costs / iters)))
+    if times % 20000 == 0 and gen_model != None and vocab != None:
+      sample(sess, model = gen_model, vocab = vocab)
 
   if gen_model != None and vocab != None:
     sample(sess, model = gen_model, vocab = vocab)
@@ -88,6 +88,17 @@ def sample(sess, model, vocab, max_gen_len = 50):
   tf.logging.info(line.encode('utf-8'))
 
 def train(config):
+  # init for cluster
+  cluster_conf = config["cluster_conf"]
+  cluster = tf.train.ClusterSpec(cluster_conf)
+  server = tf.train.Server(cluster,
+                           job_name = FLAGS.job_name,
+                           task_index = FLAGS.task_id)
+  n_ps = len(cluster_conf['ps'])
+  n_workers = len(cluster_conf['worker'])
+  if FLAGS.job_name == "ps": server.join()
+  is_chief = (FLAGS.task_id == 0)
+
   # load Vocab
   vocab = data_reader.Vocab(vocab_limits = config['vocab_size'])
   vocab.load_metadata(config['metadata'])
@@ -100,19 +111,7 @@ def train(config):
                                       batch_size = config['batch_size'],
                                       seq_length = config['seq_length'])
 
-  # init for cluster
-  cluster_conf = config["cluster_conf"]
-  cluster = tf.train.ClusterSpec(cluster_conf)
-  server = tf.train.Server(cluster,
-                           job_name = FLAGS.job_name,
-                           task_index = FLAGS.task_id)
-  n_ps = len(cluster_conf['ps'])
-  n_workers = len(cluster_conf['worker'])
-  if FLAGS.job_name == "ps": server.join()
-  is_chief = (FLAGS.task_id == 0)
-
-  initializer = tf.random_uniform_initializer(-config['init_scale'],
-                                              config['init_scale'])
+  initializer = tf.random_uniform_initializer(-config['init_scale'], config['init_scale'])
 
   # create models
   with tf.device(tf.train.replica_device_setter(worker_device="/job:worker/task:%d" % FLAGS.task_id,
@@ -155,11 +154,11 @@ def train(config):
       train_model.assign_lr(sess, config['learning_rate'] * lr_decay)
 
       tf.logging.info('Iter {} Start, Learning_rate: {:4f}'.format(i, sess.run(train_model.lr)))
-      costs, iters = run_epoch(sess, train_model, train_data, \
+      costs, iters = run_epoch(sess, train_model, train_data,
                                is_training = True,
                                gen_model = gen_model,
                                vocab = vocab)
-      tf.logging.info('Iter {}: training_loss:{:4f}'.format(i, costs / iters))
+      tf.logging.info('Iter {}: training_loss:{:4f}'.format(i, np.exp(costs / iters)))
 
 def gen(config):
   vocab = data_reader.Vocab(vocab_limits = config['vocab_size'])
