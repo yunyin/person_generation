@@ -20,7 +20,6 @@ class Model():
 
   def __init__(self, is_training, config, optimizer = None, lr = None):
     self.config = config
-    batch_size = config['batch_size']
     seq_length = config['seq_length']
     hidden_size = config['hidden_size']
     vocab_size = config['vocab_size']
@@ -29,16 +28,16 @@ class Model():
     self._lr = lr
 
     with tf.name_scope('inputs'):
-      self.input_data = tf.placeholder(tf.int32, [batch_size, seq_length])
-      self.target_data = tf.placeholder(tf.int32, [batch_size, seq_length])
-      self.mask = tf.placeholder(config['data_type'], [batch_size, seq_length])
+      self.input_data = tf.placeholder(tf.int32, [None, seq_length], name = 'input_data')
+      self.target_data = tf.placeholder(tf.int32, [None, seq_length], name = 'target_data')
+      self.mask = tf.placeholder(config['data_type'], [None, seq_length], name = 'mask')
 
     with tf.name_scope('model'):
       basic_cell = self.lstm_cell
       self.cell = tf.contrib.rnn.MultiRNNCell(
           [basic_cell()] * config['num_layers'], state_is_tuple = True)
-
-      self._initial_state = self.cell.zero_state(batch_size, config['data_type'])
+      ibatch = tf.shape(self.input_data)[0]
+      self._initial_state = self.cell.zero_state(ibatch, config['data_type'])
 
       with tf.device("/cpu:0"):
         embedding = tf.get_variable(
@@ -61,10 +60,20 @@ class Model():
           "softmax_b", [vocab_size], dtype = config['data_type'])
       logits = tf.matmul(output, softmax_w) + softmax_b
 
-      logits = tf.reshape(logits, [batch_size, seq_length, vocab_size])
-      
-      self.probs = tf.nn.softmax(logits)
+      logits = tf.reshape(logits, [-1, seq_length, vocab_size])
 
+      self.probs = tf.nn.softmax(logits, name = 'probs')
+      self._final_state = state
+
+      self.one_hot = tf.one_hot(indices = self.target_data,
+                                depth = vocab_size,
+                                on_value = 1.,
+                                off_value = 0.,
+                                axis = -1)
+      self.target_probs = self.one_hot * self.probs
+      self.target_probs = tf.reduce_sum(self.target_probs, axis = 2)
+
+      if not is_training: return
       loss = tf.contrib.seq2seq.sequence_loss(
           logits = logits,
           targets = self.target_data,
@@ -73,9 +82,6 @@ class Model():
           average_across_batch=True)
 
       self._cost = cost = tf.reduce_sum(loss)
-      self._final_state = state
-
-    if not is_training: return
 
     with tf.name_scope('optimize'):
       tvars = tf.trainable_variables()

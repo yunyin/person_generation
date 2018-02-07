@@ -37,29 +37,34 @@ def HParam():
   else: config['data_type'] = tf.float32
   return config
 
-def run_epoch(sess, model, data, is_training = False, gen_model = None, vocab = None):
-  data.reset()
+def run_epoch(sess, model, datapath, config, vocab, is_training = False, gen_model = None):
   costs = 0
   iters = 0
   times = 0
-  while data.has_next_batch():
-    x_batch, y_batch, mask = data.next_batch()
-    feed_dict = {model.input_data: x_batch,
-                 model.target_data: y_batch,
-                 model.mask: mask}
+  for line in open(datapath):
+    data = data_reader.DataReader(line.strip(),
+                                  vocab = vocab,
+                                  batch_size = config['batch_size'],
+                                  seq_length = config['seq_length'])
+    data.reset()
+    while data.has_next_batch():
+      x_batch, y_batch, mask = data.next_batch()
+      feed_dict = {model.input_data: x_batch,
+                   model.target_data: y_batch,
+                   model.mask: mask}
 
-    fetches = {"costs": model._cost}
-    if is_training: fetches["train_op"] = model.train_op
+      fetches = {"costs": model._cost}
+      if is_training: fetches["train_op"] = model.train_op
 
-    vals = sess.run(fetches, feed_dict)
-    costs += vals["costs"]
-    
-    iters += data.seq_length
-    times += 1
-    if times % 2000 == 100:
-      tf.logging.info('step {}: training_loss:{:4f}'.format(times, np.exp(costs / iters)))
-    if times % 20000 == 0 and gen_model != None and vocab != None:
-      sample(sess, model = gen_model, vocab = vocab)
+      vals = sess.run(fetches, feed_dict)
+      costs += vals["costs"]
+
+      iters += data.seq_length
+      times += 1
+      if times % 2000 == 100:
+        tf.logging.info('step {}: training_loss:{:4f}'.format(times, np.exp(costs / iters)))
+      if times % 20000 == 0 and gen_model != None and vocab != None:
+        sample(sess, model = gen_model, vocab = vocab)
 
   if gen_model != None and vocab != None:
     sample(sess, model = gen_model, vocab = vocab)
@@ -91,6 +96,11 @@ def train(config):
   # init for cluster
   cluster_conf = config["cluster_conf"]
   cluster = tf.train.ClusterSpec(cluster_conf)
+  sess_config = tf.ConfigProto(allow_soft_placement = True,
+                               log_device_placement = True)
+  sess_config.gpu_options.allow_growth = True
+  sess_config.gpu_options.per_process_gpu_memory_fraction = 0.9
+
   server = tf.train.Server(cluster,
                            job_name = FLAGS.job_name,
                            task_index = FLAGS.task_id)
@@ -105,19 +115,13 @@ def train(config):
   config['vocab_size'] = vocab.vocab_size()
   tf.logging.info(config)
 
-  # load Data
-  train_data = data_reader.DataReader(config['train_data'][FLAGS.task_id],
-                                      vocab = vocab,
-                                      batch_size = config['batch_size'],
-                                      seq_length = config['seq_length'])
-
   initializer = tf.random_uniform_initializer(-config['init_scale'], config['init_scale'])
 
   # create models
   with tf.device(tf.train.replica_device_setter(worker_device="/job:worker/task:%d" % FLAGS.task_id,
                                                 cluster = cluster)):
     with tf.name_scope('Train'):
-      opt, lr = optimizer.get_optimizer("sgd", config['learning_rate'])
+      opt, lr = optimizer.get_optimizer("momentum", config['learning_rate'])
       sync_opt = tf.train.SyncReplicasOptimizer(opt,
                                                 replicas_to_aggregate = n_workers * config['sync_freq'],
                                                 total_num_replicas = n_workers)
@@ -139,9 +143,6 @@ def train(config):
 
   sv = tf.train.Supervisor(is_chief = is_chief,
                            logdir = config['logdir'])
-  sess_config = tf.ConfigProto(allow_soft_placement = True,
-                               log_device_placement = True,
-                               device_filters = ["/job:ps", "/job:worker/task:%d" % FLAGS.task_id])
 
   tf.logging.info('Start Sess')
   with sv.prepare_or_wait_for_session(server.target, config=sess_config) as sess:
@@ -154,7 +155,9 @@ def train(config):
       train_model.assign_lr(sess, config['learning_rate'] * lr_decay)
 
       tf.logging.info('Iter {} Start, Learning_rate: {:4f}'.format(i, sess.run(train_model.lr)))
-      costs, iters = run_epoch(sess, train_model, train_data,
+      costs, iters = run_epoch(sess, train_model,
+                               config = config,
+                               datapath = config['train_data'][FLAGS.task_id],
                                is_training = True,
                                gen_model = gen_model,
                                vocab = vocab)
@@ -179,7 +182,7 @@ def gen(config):
     saver.restore(sess, ckpt)
 
     sample(sess, model = gen_model, vocab = vocab)
-  
+
 def main(_):
   config = HParam()
   if not FLAGS.type:

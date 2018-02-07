@@ -13,7 +13,7 @@ class Vocab():
     sys.stdout.flush()
     total_data = []
     for line in open(datafiles):
-      words = list(line.strip().replace(" ", "").decode('utf-8'))
+      words = line.strip().split()
       total_data.extend(words)
 
     print 'Data Load End For Vocab Create'
@@ -42,6 +42,7 @@ class Vocab():
   def char2id(self, c):
     if not self.char2id_dict.has_key(c):
       c = '<unk>'
+
     return self.char2id_dict[c]
 
   def id2char(self, id):
@@ -56,9 +57,9 @@ class Vocab():
 
     cnt = 0
     for line in open(file):
-      idx, word = line.strip().decode('utf-8').split('\t')
-      self.char2id_dict[word] = int(idx)
-      self.id2char_dict[int(idx)] = word
+      idx, word = line.strip().split('\t')
+      self.char2id_dict[word.decode('utf-8')] = int(idx)
+      self.id2char_dict[int(idx)] = word.decode('utf-8')
       cnt += 1
       if cnt == self._vocab_size: break
     self._vocab_size = len(self.id2char_dict)
@@ -69,7 +70,7 @@ class Vocab():
     with open(file, 'w') as f:
       for i in range(self._vocab_size):
         c = self.id2char(i)
-        f.write('{}\t{}\n'.format(i, c.encode('utf-8')))
+        f.write('{}\t{}\n'.format(i, c))
 
 class DataReader():
   def __init__(self, datafiles, vocab, seq_length = 1, batch_size = 1):
@@ -81,8 +82,8 @@ class DataReader():
     sys.stdout.flush()
     self.data = []
     for line in open(datafiles):
-      line = line.strip().replace(" ", "")
-      words = list(line.decode('utf-8'))
+      sen = line.strip().split('\t')[0]
+      words = list(sen.replace(' ', '').decode('utf-8'))
       words.append("</s>")
       words.insert(0, "<s>")
       words = [self.vocab.char2id(c) for c in words]
@@ -99,7 +100,7 @@ class DataReader():
     print 'Start arrange data'
     sys.stdout.flush()
     batch_len = np.array([0] * batch_size)
-
+    np.random.shuffle(data)
     refine_data = []
     for i in range(batch_size): refine_data.append([])
     for sen in data:
